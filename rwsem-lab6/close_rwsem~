@@ -1,0 +1,3 @@
+#!/bin/sh
+sudo rmmod rwsem
+sudo rm -f /dev/arr_dev

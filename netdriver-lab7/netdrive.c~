@@ -1,0 +1,114 @@
+// lab 7 - collin atkins
+
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+#include <linux/ip.h>
+
+struct net_device* os1;
+struct net_device* os0;
+
+// Stubs for device operations
+int os_open(struct net_device *dev) { return 0; }
+int os_stop(struct net_device *dev) { return 0; }
+int os_start_xmit(struct sk_buff *skb, struct net_device *dev) { return 0; }
+struct net_device_stats *os_stats(struct net_device *dev) {
+	return &(((struct os_priv*)netdev_priv(dev))->stats);
+}
+
+// Device ops
+static const struct net_device_ops os_device_ops = {
+	.ndo_open = os_open,
+   .ndo_stop = os_stop,
+   .ndo_start_xmit = os_start_xmit,
+   .ndo_get_stats = os_stats,
+};
+
+// Creates the header
+int os_header(struct sk_buff *skb, struct net_device *dev, unsigned short type, const void *daddr, const void *saddr, unsigned int len) { return 0; }
+
+// Header ops
+static const struct header_ops os_header_ops = {
+	.create  = os_header,
+};
+
+// dev is used to start/stop transmission of packs, data is the packet
+struct os_packet {
+	struct net_device *dev;
+	int datalen;
+	u8 data[ETH_DATA_LEN];
+};
+
+struct os_priv {
+	struct net_device_stats stats;
+	struct sk_buff *skb;
+	struct os_packet *pkt;
+	struct net_device *dev;
+};
+
+int init_module (void) {
+	struct os_priv *priv;
+	struct os_priv *packet;
+	int i = 0;	
+
+	// Space is allocated and initialized	
+	os0 = alloc_etherdev(sizeof(priv));
+   os1 = alloc_etherdev(sizeof(priv));
+	
+	//MAC address, broadcast, and header length is set
+	for (i=0 ; i < 6 ; i++) os0->dev_addr[i] = (unsigned char)i;
+   for (i=0 ; i < 6 ; i++) os0->broadcast[i] = (unsigned char)15;
+   os0->hard_header_len = 14;
+	for (i=0 ; i < 6 ; i++) os1->dev_addr[i] = (unsigned char)i;
+   for (i=0 ; i < 6 ; i++) os1->broadcast[i] = (unsigned char)15;
+   os1->hard_header_len = 14;
+	os1->dev_addr[5]++;
+	
+	// Name field set
+	memcpy(os0->name, "os0\0", 4);
+	memcpy(os1->name, "os1\0", 4);
+	
+	// Ties the operations to the interface
+	os0->netdev_ops = &os_device_ops;
+   os1->netdev_ops = &os_device_ops;
+	os0->header_ops = &os_header_ops;
+   os1->header_ops = &os_header_ops;
+
+	// Disables ARP recognition
+	os0->flags |= IFF_NOARP;
+   os1->flags |= IFF_NOARP;
+
+	// Private area initialized, accessed through netdev_priv()	
+	priv = netdev_priv(os0);
+   memset(priv, 0, sizeof(priv));
+	// Space for the packet is allocated
+	priv->pkt = kmalloc (sizeof (packet), GFP_KERNEL);
+   priv->pkt->dev = os0;
+	
+	priv = netdev_priv(os1);
+   memset(priv, 0, sizeof(priv));
+	priv->pkt = kmalloc (sizeof (packet), GFP_KERNEL);
+   priv->pkt->dev = os1;
+	
+	// Interface is registered
+	register_netdev(os0);
+   register_netdev(os1);
+
+	return 0;
+}
+
+void cleanup_module(void) {
+	struct os_priv *priv;
+   if (os0) {
+      priv = netdev_priv(os0);
+      kfree(priv->pkt);
+      unregister_netdev(os0);
+   }
+	if (os1) {
+      priv = netdev_priv(os1);
+      kfree(priv->pkt);
+      unregister_netdev(os1);
+   }
+}
+MODULE_LICENSE("GPL");

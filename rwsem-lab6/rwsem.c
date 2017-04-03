@@ -1,0 +1,123 @@
+// Collin Atkins
+// Lab 6 - rwsem with device drivers
+// Worked alongside Ryan Tackett
+
+// To run the full program do this:
+// Make; ./tryit write "Testing up in here"; ./tryit read; make clean
+
+// Modified driver-05.c from notes
+// Sets up a driver called interact with the operations
+//   to open, close, read, and write
+
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/fs.h>     // chrdev region and wait.h
+#include <linux/cdev.h>   // cdev add
+#include <asm/uaccess.h>  // copy to user and from
+#include <linux/sched.h>  // contains rwsem and wait queue
+
+// Used for the delay to have time to interact with the driver
+wait_queue_head_t queue;
+
+int Major;
+struct cdev *kernel_cdev;
+dev_t dev_no;
+
+// Device to interact with, simple char array
+struct device {
+   char array[100];
+   struct rw_semaphore rwsem;
+} char_arr;
+
+int open(struct inode *inode, struct file *filp) {
+   return 0;
+}
+
+int release(struct inode *inode, struct file *filp) {
+    return 0;
+}
+
+ssize_t read(struct file *filp, char *buff, size_t cnt, loff_t *offp) {
+   unsigned long ret;
+   printk("read: buffer at start=%s\n",buff);
+	// Toggle rwsem to taken
+   down_read(&char_arr.rwsem);
+   printk("read: through semaphore\n");
+	// Set time in queue to run
+   wait_event_timeout(queue, 0, 20*HZ);
+   printk("read: through the timer\n");
+   ret = copy_to_user(buff, char_arr.array, cnt);
+   printk("read: done reading\n");
+	// Releases rwsem
+   up_read(&char_arr.rwsem);
+   return cnt;
+}
+
+ssize_t write(struct file *filp, const char *buff, size_t cnt, loff_t *offp) {
+   unsigned long ret; 
+   printk(KERN_INFO "write: entering\n");
+	// Toggles rwsem to taken
+   down_write(&char_arr.rwsem);
+	// Sets time in queue to run
+   wait_event_timeout(queue, 0, 20*HZ);
+	// Makes sure it is under 100 chars
+   cnt = (cnt > 99) ? 99 : cnt;
+   ret = copy_from_user(char_arr.array, buff, cnt); 
+   printk("write: %s\n", buff);
+	// Releases rwsem
+   up_write(&char_arr.rwsem);
+   return cnt;
+}
+
+struct file_operations fops = {
+   .read = read,
+   .write = write,
+   .open = open,
+   .release = release
+}; 
+
+int init_module (void) {
+   int ret;
+
+   printk("---------------------------------------\n");
+
+	// Allocates new character device, sets operations
+   kernel_cdev = cdev_alloc();    
+   kernel_cdev->ops = &fops;
+   kernel_cdev->owner = THIS_MODULE;
+   printk(KERN_INFO "Starting...\n");
+	
+	// Allocates memory for our new device, named interface
+   ret = alloc_chrdev_region(&dev_no, 0, 1, "interface");
+   if (ret < 0) {
+      printk(KERN_INFO "Major number allocation is failed\n");
+      return ret;    
+   }
+
+	// Creates the device with a new major number
+   Major = MAJOR(dev_no);
+   if (MKDEV(Major,0) != dev_no)
+      printk(KERN_INFO "Yikes - something is wrong!\n");
+   
+	// Adds the new device
+   printk (KERN_INFO "init: Major %d\n", Major);
+   ret = cdev_add(kernel_cdev, dev_no, 1);
+   if (ret < 0) {
+      printk(KERN_INFO "Unable to allocate cdev");
+      return ret;
+   }
+
+   init_rwsem(&char_arr.rwsem);
+   init_waitqueue_head(&queue);
+    
+   return 0;
+}
+
+void cleanup_module(void) {
+   printk(KERN_INFO "Cleaning up\n");
+   cdev_del(kernel_cdev);
+   unregister_chrdev_region(dev_no, 1);
+   unregister_chrdev(Major, "interface");
+}
+
+MODULE_LICENSE("GPL");    
